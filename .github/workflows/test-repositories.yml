@@ -1,0 +1,54 @@
+name: Test repository builders
+# Fork-only end-to-end check for the RPM/Arch repository builders with a throwaway key.
+# Not part of the feature: the real workflow signs with the dedicated secret key.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: fedora:latest
+    steps:
+      - name: Install repository tools
+        run: dnf install -y git createrepo_c rpm-sign gnupg2
+      - uses: actions/checkout@v7.0.1
+      - name: Generate throwaway signing key
+        run: |
+          gpg --batch --pinentry-mode loopback --passphrase '' --quick-gen-key "aino fork test" ed25519 sign 0
+          fingerprint="$(gpg --with-colons --list-keys | awk -F: '/^fpr/ {print $10; exit}')"
+          echo "$fingerprint" > packaging/signing-key-fingerprint.txt
+          echo "SIGNING_FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
+      - name: Build signed RPM repository and check DNF candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/build_rpm_repository.py --output build/site --fingerprint "$SIGNING_FINGERPRINT" --verify-dnf
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: test-pages-rpm
+          path: build/site
+          if-no-files-found: error
+  arch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: archlinux:base-devel
+    steps:
+      - name: Install repository tools
+        run: pacman -Syu --noconfirm --needed git gnupg python
+      - uses: actions/checkout@v7.0.1
+      - name: Generate throwaway signing key
+        run: |
+          gpg --batch --pinentry-mode loopback --passphrase '' --quick-gen-key "aino fork test" ed25519 sign 0
+          fingerprint="$(gpg --with-colons --list-keys | awk -F: '/^fpr/ {print $10; exit}')"
+          echo "$fingerprint" > packaging/signing-key-fingerprint.txt
+          echo "SIGNING_FINGERPRINT=$fingerprint" >> "$GITHUB_ENV"
+      - name: Build signed pacman repository and check candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/build_arch_repository.py --output build/site --fingerprint "$SIGNING_FINGERPRINT" --verify-pacman
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: test-pages-arch
+          path: build/site
+          if-no-files-found: error
